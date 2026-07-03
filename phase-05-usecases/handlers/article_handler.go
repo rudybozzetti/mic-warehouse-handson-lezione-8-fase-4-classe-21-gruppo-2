@@ -6,6 +6,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -83,12 +84,15 @@ func (h *ArticleHandler) CreateArticle(c echo.Context) error {
 // ============================================================================
 
 func (h *ArticleHandler) GetArticle(c echo.Context) error {
-	// TODO Slice 1:
-	// - read the id path param: c.Param("id");
-	// - call h.getUC.Execute(c.Request().Context(), usecases.GetArticleInput{ID: id});
-	// - if errors.Is(err, usecases.ErrArticleNotFound) -> 404;
-	// - on any other error -> 400; on success -> 200 with toArticleResponse.
-	return c.JSON(http.StatusNotImplemented, map[string]string{"error": "GetArticle handler TODO"})
+	id := c.Param("id")
+	out, err := h.getUC.Execute(c.Request().Context(), usecases.GetArticleInput{ID: id})
+	if err != nil {
+		if errors.Is(err, usecases.ErrArticleNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, toArticleResponse(out.Article))
 }
 
 // ============================================================================
@@ -96,12 +100,19 @@ func (h *ArticleHandler) GetArticle(c echo.Context) error {
 // ============================================================================
 
 func (h *ArticleHandler) ChangeArticlePrice(c echo.Context) error {
-	// TODO Slice 2:
-	// - bind ChangePriceRequest;
-	// - call h.changePriceUC.Execute with ArticleID = c.Param("id"),
-	//   NewPriceCents and Currency from the body;
-	// - on error -> 400; on success -> 200 with toArticleResponse.
-	return c.JSON(http.StatusNotImplemented, map[string]string{"error": "ChangeArticlePrice handler TODO"})
+	req := new(ChangePriceRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	}
+	out, err := h.changePriceUC.Execute(c.Request().Context(), usecases.ChangeArticlePriceInput{
+		ArticleID:     c.Param("id"),
+		NewPriceCents: req.PriceCents,
+		Currency:      req.Currency,
+	})
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, toArticleResponse(out.Article))
 }
 
 // toArticleResponse maps the aggregate to the transport DTO. Mapping is the

@@ -3,14 +3,12 @@ package usecases
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"warehouse.local/core/entities"
 	"warehouse.local/core/interfaces"
 )
-
-// ErrGetArticleTODO is returned by the starter until you complete the GetArticle
-// slice (Phase 05).
-var ErrGetArticleTODO = errors.New("GetArticleUseCase TODO: complete the GetArticle slice")
 
 // GetArticleInput identifies the aggregate to load.
 type GetArticleInput struct {
@@ -36,10 +34,12 @@ func NewGetArticleUseCase(repo interfaces.ArticleRepository) *GetArticleUseCase 
 }
 
 func (uc *GetArticleUseCase) Execute(ctx context.Context, in GetArticleInput) (*GetArticleOutput, error) {
-	// TODO GetArticle slice:
-	// - reject an empty ID;
-	// - load with uc.repo.FindByID(ctx, in.ID);
-	// - wrap the repository error with fmt.Errorf("GetArticle: %w", err) so the
-	//   handler can detect ErrArticleNotFound via errors.Is.
-	return nil, ErrGetArticleTODO
+	if strings.TrimSpace(in.ID) == "" {
+		return nil, errors.New("GetArticle: ID is required")
+	}
+	a, err := uc.repo.FindByID(ctx, in.ID)
+	if err != nil {
+		return nil, fmt.Errorf("GetArticle: %w", err)
+	}
+	return &GetArticleOutput{Article: a}, nil
 }
