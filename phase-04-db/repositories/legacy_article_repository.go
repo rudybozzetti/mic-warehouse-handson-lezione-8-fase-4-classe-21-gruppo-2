@@ -4,14 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
 	"warehouse.local/core/entities"
 	"warehouse.local/core/interfaces"
 )
 
-// ErrLegacyRepositoryTODO is returned by the starter implementation until the
-// participant completes the legacy ACL adapter in Phase 04 Task 1.
-var ErrLegacyRepositoryTODO = errors.New("legacy mysql repository TODO: complete Phase 04 Task 1")
+// legacyDefaultCurrency is assumed for every legacy row, since legacy_db has
+// no currency column.
+const legacyDefaultCurrency = "EUR"
 
 // LegacyMySQLArticleRepository implements interfaces.ArticleRepository against
 // the simplified legacy MySQL schema (legacy-init.sql).
@@ -37,52 +41,170 @@ func NewLegacyMySQLArticleRepository(db *sql.DB) *LegacyMySQLArticleRepository {
 var _ interfaces.ArticleRepository = (*LegacyMySQLArticleRepository)(nil)
 
 func (r *LegacyMySQLArticleRepository) Save(ctx context.Context, a *entities.Article) error {
-	// TODO Task 1:
-	// - upsert into legacy_db.articles
-	// - convert Money.AmountCents into DECIMAL string, e.g. 2999 -> "29.99"
-	// - drop Currency because legacy_db has no currency column
-	// - leave Article.Inventories out of scope for this phase
-	return ErrLegacyRepositoryTODO
+	now := time.Now().UTC()
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = now
+	}
+	a.UpdatedAt = now
+
+	const upsert = `
+		INSERT INTO articles (id, sku, name, description, price, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+		  sku = VALUES(sku),
+		  name = VALUES(name),
+		  description = VALUES(description),
+		  price = VALUES(price),
+		  updated_at = VALUES(updated_at)
+	`
+	_, err := r.db.ExecContext(ctx, upsert,
+		a.ID, a.SKU.Code, a.Name, a.Description,
+		centsToDecimal(a.Price.AmountCents),
+		a.CreatedAt, a.UpdatedAt,
+	)
+	return err
 }
 
 func (r *LegacyMySQLArticleRepository) FindByID(ctx context.Context, id string) (*entities.Article, error) {
-	// TODO Task 1:
-	// - SELECT id, sku, name, description, price, created_at, updated_at
-	// - convert DECIMAL price back to cents
-	// - rehydrate SKU and Money through their factories
-	// - default Currency to "EUR"
-	return nil, ErrLegacyRepositoryTODO
+	const q = `SELECT id, sku, name, description, price, created_at, updated_at FROM articles WHERE id = ?`
+	row := r.db.QueryRowContext(ctx, q, id)
+	return scanLegacyArticle(row)
 }
 
 func (r *LegacyMySQLArticleRepository) FindBySKU(ctx context.Context, skuCode string) (*entities.Article, error) {
-	// TODO Task 1: same translation as FindByID, filtered by sku.
-	return nil, ErrLegacyRepositoryTODO
+	const q = `SELECT id, sku, name, description, price, created_at, updated_at FROM articles WHERE sku = ?`
+	row := r.db.QueryRowContext(ctx, q, skuCode)
+	return scanLegacyArticle(row)
 }
 
 func (r *LegacyMySQLArticleRepository) List(ctx context.Context) ([]*entities.Article, error) {
-	// TODO Task 1: list legacy rows and rehydrate each as entities.Article.
-	return nil, ErrLegacyRepositoryTODO
+	const q = `SELECT id, sku, name, description, price, created_at, updated_at FROM articles ORDER BY created_at DESC`
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*entities.Article
+	for rows.Next() {
+		a, err := scanLegacyArticleFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func (r *LegacyMySQLArticleRepository) Delete(ctx context.Context, id string) error {
-	// TODO Task 1: DELETE FROM articles WHERE id = ? and return ErrArticleNotFound
-	// when no row was deleted.
-	return ErrLegacyRepositoryTODO
+	res, err := r.db.ExecContext(ctx, `DELETE FROM articles WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrArticleNotFound
+	}
+	return nil
+}
+
+// scanLegacyArticle decodes one legacy row into an *entities.Article, crossing
+// the ACL boundary: DECIMAL price -> cents, currency defaulted to EUR.
+func scanLegacyArticle(row *sql.Row) (*entities.Article, error) {
+	var (
+		id, sku, name, desc, price string
+		createdAt, updatedAt       time.Time
+	)
+	if err := row.Scan(&id, &sku, &name, &desc, &price, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrArticleNotFound
+		}
+		return nil, fmt.Errorf("scan legacy article: %w", err)
+	}
+	return buildLegacyArticle(id, sku, name, desc, price, createdAt, updatedAt)
+}
+
+func scanLegacyArticleFromRows(rows *sql.Rows) (*entities.Article, error) {
+	var (
+		id, sku, name, desc, price string
+		createdAt, updatedAt       time.Time
+	)
+	if err := rows.Scan(&id, &sku, &name, &desc, &price, &createdAt, &updatedAt); err != nil {
+		return nil, err
+	}
+	return buildLegacyArticle(id, sku, name, desc, price, createdAt, updatedAt)
+}
+
+// buildLegacyArticle rehydrates the domain aggregate through its factories,
+// the ACL's crossing point back into the clean domain.
+func buildLegacyArticle(id, sku, name, desc, price string, createdAt, updatedAt time.Time) (*entities.Article, error) {
+	skuVO, err := entities.NewSKU(sku)
+	if err != nil {
+		return nil, fmt.Errorf("rehydrate SKU: %w", err)
+	}
+	cents, err := decimalToCents(price)
+	if err != nil {
+		return nil, fmt.Errorf("rehydrate price: %w", err)
+	}
+	priceVO, err := entities.NewMoney(cents, legacyDefaultCurrency)
+	if err != nil {
+		return nil, fmt.Errorf("rehydrate Money: %w", err)
+	}
+	return &entities.Article{
+		ID:          id,
+		SKU:         *skuVO,
+		Name:        name,
+		Description: desc,
+		Price:       *priceVO,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+	}, nil
 }
 
 // centsToDecimal converts integer cents into the legacy DECIMAL string the
-// legacy_db.articles.price column expects, e.g. 2999 -> "29.99".
-//
-// TODO Task 1: implement WITHOUT float64 (integer/string math only). The
-// conversion tests in legacy_conversions_test.go pin the expected behaviour.
+// legacy_db.articles.price column expects, e.g. 2999 -> "29.99". Integer/string
+// math only, no float64.
 func centsToDecimal(cents int64) string {
-	return "" // TODO Task 1
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	}
+	return fmt.Sprintf("%s%d.%02d", sign, cents/100, cents%100)
 }
 
 // decimalToCents parses a legacy DECIMAL string (e.g. "29.99") back into integer
-// cents. "1" -> 100, "1.5" -> 150, "29.99" -> 2999.
-//
-// TODO Task 1: implement WITHOUT float64. The conversion tests pin the behaviour.
+// cents. "1" -> 100, "1.5" -> 150, "29.99" -> 2999. Integer/string math only.
 func decimalToCents(s string) (int64, error) {
-	return 0, ErrLegacyRepositoryTODO
+	s = strings.TrimSpace(s)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	parts := strings.SplitN(s, ".", 2)
+	whole, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("decimalToCents: invalid decimal %q: %w", s, err)
+	}
+	var frac int64
+	if len(parts) == 2 {
+		fracStr := parts[1]
+		if len(fracStr) > 2 {
+			return 0, fmt.Errorf("decimalToCents: too many decimal places in %q", s)
+		}
+		for len(fracStr) < 2 {
+			fracStr += "0"
+		}
+		frac, err = strconv.ParseInt(fracStr, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("decimalToCents: invalid decimal %q: %w", s, err)
+		}
+	}
+	cents := whole*100 + frac
+	if neg {
+		cents = -cents
+	}
+	return cents, nil
 }

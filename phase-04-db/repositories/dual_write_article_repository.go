@@ -2,15 +2,10 @@ package repositories
 
 import (
 	"context"
-	"errors"
 
 	"warehouse.local/core/entities"
 	"warehouse.local/core/interfaces"
 )
-
-// ErrDualWriteTODO is returned by the starter implementation until you complete
-// the dual-write / single-read decorator in Phase 04 Task 2.
-var ErrDualWriteTODO = errors.New("dual-write decorator TODO: complete Phase 04 Task 2")
 
 // ReadMode controls where DualWriteArticleRepository routes reads.
 //
@@ -51,29 +46,35 @@ func NewDualWriteArticleRepository(
 var _ interfaces.ArticleRepository = (*DualWriteArticleRepository)(nil)
 
 func (r *DualWriteArticleRepository) Save(ctx context.Context, a *entities.Article) error {
-	// TODO Task 2: write to legacy FIRST; if it fails, return the error and do
-	// NOT touch BC. Then write to BC; if it fails, return the error (legacy keeps
-	// the article — there is no rollback policy in this exercise).
-	return ErrDualWriteTODO
+	if err := r.legacy.Save(ctx, a); err != nil {
+		return err
+	}
+	return r.bc.Save(ctx, a)
 }
 
 func (r *DualWriteArticleRepository) Delete(ctx context.Context, id string) error {
-	// TODO Task 2: delete from legacy first, then BC (same failure rule as Save).
-	return ErrDualWriteTODO
+	if err := r.legacy.Delete(ctx, id); err != nil {
+		return err
+	}
+	return r.bc.Delete(ctx, id)
 }
 
 func (r *DualWriteArticleRepository) FindByID(ctx context.Context, id string) (*entities.Article, error) {
-	// TODO Task 2: route the read to a single store based on r.mode
-	// (ReadFromBC -> bc, otherwise legacy).
-	return nil, ErrDualWriteTODO
+	return r.readStore().FindByID(ctx, id)
 }
 
 func (r *DualWriteArticleRepository) FindBySKU(ctx context.Context, skuCode string) (*entities.Article, error) {
-	// TODO Task 2: route the read to a single store based on r.mode.
-	return nil, ErrDualWriteTODO
+	return r.readStore().FindBySKU(ctx, skuCode)
 }
 
 func (r *DualWriteArticleRepository) List(ctx context.Context) ([]*entities.Article, error) {
-	// TODO Task 2: route the read to a single store based on r.mode.
-	return nil, ErrDualWriteTODO
+	return r.readStore().List(ctx)
+}
+
+// readStore returns the single store reads are routed to, per r.mode.
+func (r *DualWriteArticleRepository) readStore() interfaces.ArticleRepository {
+	if r.mode == ReadFromBC {
+		return r.bc
+	}
+	return r.legacy
 }
