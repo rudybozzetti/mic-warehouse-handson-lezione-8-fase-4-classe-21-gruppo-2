@@ -35,3 +35,18 @@ article_creators := {
 }
 
 default allow := false # deny everything until you build it
+
+allow if {
+	input.action == "article:read"
+	input.principal
+}
+
+allow if {
+	input.action == "article:create"
+	input.principal.email in article_creators
+}
+
+allow if {
+	input.action == "article:create"
+	input.principal.service_id in article_creators
+}
