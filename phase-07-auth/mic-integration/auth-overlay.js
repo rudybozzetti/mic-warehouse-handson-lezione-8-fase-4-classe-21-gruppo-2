@@ -12,21 +12,47 @@
   const originalFetch = window.fetch.bind(window);
 
   window.fetch = async function phase07Fetch(input, init) {
-    // TODO Phase 07 Parte B:
-    // - clone init without mutating the caller's object;
-    // - for same-origin /api/* calls, add:
-    //   Authorization: Bearer <sessionStorage token>
-    //   X-Workspace-ID: <sessionStorage workspace or ws-acme>
-    // - leave /iam/* and external calls untouched.
-    return originalFetch(input, init);
+    const requestUrl = input instanceof Request ? input.url : String(input);
+    const resolved = new URL(requestUrl, window.location.origin);
+    const isSameOriginApi = resolved.origin === window.location.origin && resolved.pathname.startsWith('/api/');
+
+    if (!isSameOriginApi) {
+      return originalFetch(input, init);
+    }
+
+    const nextInit = Object.assign({}, init);
+    const headers = new Headers(nextInit.headers || (input instanceof Request ? input.headers : undefined));
+    const token = sessionStorage.getItem(TOKEN_KEY);
+    if (token) {
+      headers.set('Authorization', 'Bearer ' + token);
+    }
+    headers.set('X-Workspace-ID', sessionStorage.getItem(WORKSPACE_KEY) || DEFAULT_WORKSPACE);
+    nextInit.headers = headers;
+
+    return originalFetch(input, nextInit);
   };
 
   async function loginDemoUser(username) {
-    // TODO Phase 07 Parte B:
-    // POST application/x-www-form-urlencoded to /iam/oauth/token with:
-    // grant_type=password, username, password=demo, client_id, scope.
-    // Store access_token in sessionStorage under TOKEN_KEY.
-    window.alert('TODO Phase 07: implement demo login before retrying Articles.');
+    const body = new URLSearchParams();
+    body.set('grant_type', 'password');
+    body.set('username', username);
+    body.set('password', 'demo');
+    body.set('client_id', USER_CLIENT_ID);
+    body.set('scope', 'openid profile offline_access');
+
+    const response = await originalFetch('/iam/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    if (!response.ok) {
+      throw new Error('token request failed: ' + response.status);
+    }
+
+    const data = await response.json();
+    sessionStorage.setItem(TOKEN_KEY, data.access_token);
+    window.location.reload();
   }
 
   function logoutDemoUser() {
