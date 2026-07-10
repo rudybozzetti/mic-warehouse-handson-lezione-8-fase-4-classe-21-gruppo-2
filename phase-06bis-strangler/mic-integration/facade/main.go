@@ -118,6 +118,9 @@ func decideUpstream(method, mode string) string {
 	if method == http.MethodGet && mode == modeWarehouseBC {
 		return upstreamWarehouseBC
 	}
+	if method == http.MethodPost && mode == modeWarehouseBC {
+		return upstreamWarehouseBC
+	}
 	return upstreamMonolith // TODO: everything stays legacy until you implement the decision
 }
 
