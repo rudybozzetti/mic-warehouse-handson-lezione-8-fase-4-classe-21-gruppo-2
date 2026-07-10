@@ -115,6 +115,9 @@ func (f *facade) handleProxy(w http.ResponseWriter, r *http.Request) {
 //     operations are not migrated yet. Part 3 will change this rule for
 //     the create.
 func decideUpstream(method, mode string) string {
+	if method == http.MethodGet && mode == modeWarehouseBC {
+		return upstreamWarehouseBC
+	}
 	return upstreamMonolith // TODO: everything stays legacy until you implement the decision
 }
 
