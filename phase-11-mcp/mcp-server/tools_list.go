@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
+	"net/http"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -20,8 +21,8 @@ import (
 // must say what the field means AND what happens when it is omitted; the
 // agent decides how to call you based only on this text.
 type ListArticlesInput struct {
-	Query string `json:"query,omitempty" jsonschema:"TODO"`
-	Limit int    `json:"limit,omitempty" jsonschema:"TODO"`
+	Query string `json:"query,omitempty" jsonschema:"optional case-insensitive substring to match against the article SKU or name; omit to return every article"`
+	Limit int    `json:"limit,omitempty" jsonschema:"optional maximum number of articles to return; omit or set to 0 to use the default of 20"`
 }
 
 // ListArticlesOutput is the tool's output schema.
@@ -33,21 +34,40 @@ type ListArticlesOutput struct {
 func registerListArticles(s *mcp.Server, bc *BCClient) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "list_articles",
-		// TODO Phase 11 Task 1b — write the description for a model reader:
-		// what the tool returns, when to prefer it over get_article, how
-		// query and limit behave. A vague description produces wrong calls.
-		Description: "TODO",
+		Description: "Browse or search the warehouse catalogue. Returns articles whose SKU " +
+			"or name contains the optional query text (case-insensitive), capped at limit " +
+			"(default 20). Use this to find articles by name or SKU, or to see what is in " +
+			"stock; once you know an article's id, use get_article for its full detail " +
+			"including per-location inventory.",
 	}, listArticlesHandler(bc))
 }
 
 func listArticlesHandler(bc *BCClient) mcp.ToolHandlerFor[ListArticlesInput, ListArticlesOutput] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, in ListArticlesInput) (*mcp.CallToolResult, ListArticlesOutput, error) {
-		// TODO Phase 11 Task 1c — the handler:
-		//   1. fetch all articles: bc.DoJSON GET /articles into []Article;
-		//   2. if in.Query is set, keep only articles whose SKU or Name
-		//      contains it, case-insensitive;
-		//   3. cap the result at in.Limit (treat 0 as the default, 20);
-		//   4. return Count and Articles.
-		return nil, ListArticlesOutput{}, errors.New("TODO Phase 11 Task 1: implement list_articles")
+		var articles []Article
+		if err := bc.DoJSON(ctx, http.MethodGet, "/articles", nil, &articles); err != nil {
+			return nil, ListArticlesOutput{}, err
+		}
+
+		if in.Query != "" {
+			query := strings.ToLower(in.Query)
+			filtered := articles[:0]
+			for _, a := range articles {
+				if strings.Contains(strings.ToLower(a.SKU), query) || strings.Contains(strings.ToLower(a.Name), query) {
+					filtered = append(filtered, a)
+				}
+			}
+			articles = filtered
+		}
+
+		limit := in.Limit
+		if limit == 0 {
+			limit = 20
+		}
+		if len(articles) > limit {
+			articles = articles[:limit]
+		}
+
+		return nil, ListArticlesOutput{Count: len(articles), Articles: articles}, nil
 	}
 }
