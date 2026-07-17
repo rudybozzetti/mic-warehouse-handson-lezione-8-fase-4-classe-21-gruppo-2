@@ -65,26 +65,33 @@ function projectOnce(PDO $pdo, string $recordsUrl): int
 
 function mapHermesArticleToMicProjection(array $record): array
 {
-    // TODO Phase 09 Task 2 — complete only this function: the consumer-side
-    // adapter between the Data Product and the MIC read model.
-    //
-    // Input: one CloudEvents record: envelope fields at the top level (id,
-    // type, source, subject, time) and the Data Product payload in
-    // $record['data'] (article_id, sku, name, price_cents, currency).
-    //
-    // Output: the array upsertProjection() persists, with keys:
-    // - code = data.sku
-    // - name = data.name, falling back to data.sku when empty
-    // - description = data.description, falling back to ''
-    // - amount_1 = price_cents as a decimal string: centsToDecimal((int)...),
-    //   never a float
-    // - amount_2 = 1, text_1 = 'WAREHOUSE-BC', text_2 = 'IVA22',
-    //   status = 'attivo' (the defaults MIC expects for this projection)
-    // - payload_json = JSON preserving projection_kind ('warehouse_article'),
-    //   article_id, currency, and the envelope metadata as source_record_id,
-    //   source_record_type, source, source_subject, source_time: the audit
-    //   trail that links every projected row back to its Hermes record.
-    throw new RuntimeException('TODO Phase 09 Task 2: implement Hermes article -> MIC projection mapping');
+    $data = $record['data'] ?? [];
+    $sku = (string)($data['sku'] ?? '');
+    $name = trim((string)($data['name'] ?? ''));
+    if ($name === '') {
+        $name = $sku;
+    }
+
+    return [
+        'code' => $sku,
+        'name' => $name,
+        'description' => (string)($data['description'] ?? ''),
+        'amount_1' => centsToDecimal((int)($data['price_cents'] ?? 0)),
+        'amount_2' => 1,
+        'text_1' => 'WAREHOUSE-BC',
+        'text_2' => 'IVA22',
+        'status' => 'attivo',
+        'payload_json' => json_encode([
+            'projection_kind' => 'warehouse_article',
+            'article_id' => $data['article_id'] ?? null,
+            'currency' => $data['currency'] ?? null,
+            'source_record_id' => $record['id'] ?? null,
+            'source_record_type' => $record['type'] ?? null,
+            'source' => $record['source'] ?? null,
+            'source_subject' => $record['subject'] ?? null,
+            'source_time' => $record['time'] ?? null,
+        ]),
+    ];
 }
 
 function upsertProjection(PDO $pdo, array $projection): void
